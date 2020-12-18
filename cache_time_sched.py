@@ -1,5 +1,5 @@
 """
-Timed cache - Version with scheduler
+Timed cache - Proof of concept
 """
 import sched
 import time

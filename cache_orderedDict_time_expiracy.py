@@ -8,40 +8,37 @@ import queue
 from collections import OrderedDict
 from operator import itemgetter
 
-stop_timer = False
-
 
 class PeriodicScheduler(object):
     def __init__(self):
         self.scheduler = sched.scheduler(time.time, time.sleep)
 
     def setup(self, interval, action, actionargs=()):
-        print("Setup in")
-        if actionargs[1].empty() is False:
-            stop_timer = actionargs[1].get()
-        else:
-            stop_timer = False
-        print("Setup: ", stop_timer or False)
-        if stop_timer is False:
-            action(actionargs[0])
-            self.actionargs = actionargs
-            self.interval = interval
-            self.scheduler.enter(self.interval, 0, self.setup, (self.interval, action, self.actionargs))
+        action(*actionargs)
+        self.scheduler.enter(interval, 1, self.setup, (interval, action, actionargs))
 
     def run(self):
         self.scheduler.run(blocking=True)
 
 
-# Todo: replace sytematic sort with dichotomic insert for CPU efficiency
 class OrderedDictTL(OrderedDict):
+    # TODO replace systematic sorting + insert with dichotomic insert for CPU efficiency
+    """
+    Overloaded OrderedDict with time expiracy on its own items
+    - each time you access an item, you reload the expiracy of this item with its lifetime expiracy
+    - delete the item if the expiracy is reached.
+    - For this proto I use the builtin sort for the dict but it is clerly not efficient. A clever
+      insert will be better.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.is_timer_started = False
         self.queue = queue.Queue()
         self.queue.put(self)
         self.queue.put(self)
-        self.stopqueue = queue.Queue()
-        self.t = None
+        #
+        self.t = threading.Thread(target=self.scheduled_prune, daemon=True)
+        self.t.start()
 
     def __getitem__(self, key):
         _ = self.queue.get()
@@ -56,7 +53,6 @@ class OrderedDictTL(OrderedDict):
     def __setitem__(self, key, value):
         _ = self.queue.get()
         self = self.queue.get()
-        self.startstoptimer_if_needed()
         if key in self:
             self.__getitem__(key)           # will only update expiracy
             return
@@ -68,23 +64,8 @@ class OrderedDictTL(OrderedDict):
         self.queue.put(self.expiracy_sorted)
         self.queue.put(self)
 
-    def pop(self, key):
-        r = super().pop(key)
-        if len(self) == 0:
-            self.startstoptimer_if_needed(stop=True)
-        return r
-
-    def startstoptimer_if_needed(self, stop=False):
-        if self.t is None:
-            self.stopqueue.put(False)
-            self.t = threading.Thread(target=self.scheduled_prune, args=(self.queue,), daemon=False)
-            print("starting")
-            self.t.start()
-        if stop is True:
-            self.stopqueue.put(True)
-            print("stopping")
-            self.t.join(timeout=5)
-            self.t = None
+    def __del__(self):
+        self.t.join(0)
 
     @staticmethod
     def prune_expired(queue):
@@ -93,26 +74,26 @@ class OrderedDictTL(OrderedDict):
         expiracy_sorted = queue.get()
         obj = queue.get()
         to_prune = []
-        print(expiracy_sorted)
         for k, v in expiracy_sorted.items():
             if now >= v[0]:
                 to_prune.append(k)
             else:
                 break
-        print(to_prune)
         for k in to_prune:
             queue.put(expiracy_sorted)
             queue.put(obj)
             obj.pop(k)
+            expiracy_sorted.pop(k)
             print("{} expired".format(k))
-        expiracy_sorted = OrderedDict(sorted(obj.items(), key=itemgetter(1)))
         queue.put(expiracy_sorted)
         queue.put(obj)
+        print("watcher: ", expiracy_sorted)
+        print("watcher: ", obj)
 
-    def scheduled_prune(self, stop_timer):
-        self.ps = PeriodicScheduler()
-        self.ps.setup(interval=1, action=self.prune_expired, actionargs=[self.queue, self.stopqueue])
-        self.ps.run()
+    def scheduled_prune(self):
+        ps = PeriodicScheduler()
+        ps.setup(1, self.prune_expired, actionargs=(self.queue,))
+        ps.run()
 
 
 pages = OrderedDictTL()

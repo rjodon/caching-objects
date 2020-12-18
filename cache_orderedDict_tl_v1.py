@@ -20,7 +20,7 @@ class PeriodicScheduler(object):
     def run(self):
         self.scheduler.run(blocking=True)
 
-
+# TODO replace systematic sorting + insert with dichotomic insert for CPU efficiency
 class OrderedDictTL(OrderedDict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
